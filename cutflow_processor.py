@@ -1,4 +1,4 @@
-#Time to complete: 639.5885846614838s elapsed
+#Time to complete: 639.5885846614838s elapsed, 328.6617329120636s elapsed, 367.95086455345154s elapsed, 61.23420310020447s, 50s, 48s
 import time
 import awkward as ak
 import numpy as np
@@ -19,6 +19,9 @@ def Phi_mpi_pi(x):
         x += 2*np.pi
     return(x)
 
+def delta_phi(a, b):
+    return (a - b + np.pi) % np.pi - np.pi
+
 class CutflowProcessor(processor.ProcessorABC):
     def __init__(self):
         self.lumi = 35.815165
@@ -29,10 +32,7 @@ class CutflowProcessor(processor.ProcessorABC):
         weights = Weights(nevents)
         ##add weight scale factors
         #calculate sign
-        sign = np.ones(nevents)
-        for i, value in enumerate(events["Stop0l_evtWeight"]):
-            if value < 0:
-                sign[i] = -1.0
+        sign = np.sign(events['Stop0l_evtWeight'])
         weights.add("sign", weight = sign)
         weights.add("puWeight", weight = events["puWeight"])
         weights.add("PrefireWeight", weight = events["PrefireWeight"])
@@ -54,17 +54,6 @@ class CutflowProcessor(processor.ProcessorABC):
         mu_SF = ak.prod(muons["muSF"], axis=1)
         weights.add("muon_SF_2", weight=mu_SF)
 
-        # mu_SF = np.ones(nevents)
-        # mu_pt = events["Muon_pt"]
-        # mu_eta = events["Muon_eta"]
-        # is_mu = events["Muon_Stop0l"]
-        # vec_mu_LooseSF = events["Muon_LooseSF"]
-        # for i, element in enumerate(vec_mu_LooseSF):
-        #     for j, weight in enumerate(element):
-        #         if (np.abs(mu_eta[i][j]) < 2.4 and mu_pt[i][j] > 5 and is_mu[i][j] == 1):
-        #             mu_SF[i] *= weight
-        # weights.add("muon_SF", weight=mu_SF)
-
         #Calculate electron_SF
         electrons = ak.zip(
             {"pt": events.Electron_pt,
@@ -78,44 +67,16 @@ class CutflowProcessor(processor.ProcessorABC):
         weights.add("electron_SF_2", weight=e_sf)
         
         #calculate B_SF
-        B_SF = events["BTagWeight"].to_numpy()
-        B_SF_fast = events["BTagWeight_FS"].to_numpy()
-        for i in range(nevents):
-            if B_SF[i] < 10.0 and B_SF[i] >= 0.0:
-                pass
-            elif B_SF[i] > 10.0:
-                B_SF = 10.0
-            elif B_SF[i] < 0:
-                B_SF[i] = 1.0
-            elif B_SF[i] == np.inf:
-                B_SF[i] = 1.0
-            if B_SF_fast[i] < 10.0 and B_SF_fast[i] >= 0.0:
-                pass
-            elif B_SF_fast[i] > 10.0:
-                B_SF_fast[i] = 10.0
-            elif B_SF_fast[i] < 0:
-                B_SF_fast[i] = 1.0
-            elif B_SF_fast[i] == np.inf:
-                B_SF_fast[i] = 1
+        B_SF = np.clip(events["BTagWeight"].to_numpy(), 0, 10)
+        B_SF_fast = np.clip(events["BTagWeight_FS"].to_numpy(), 0 ,10)
         weights.add("B_SF", weight = B_SF)
         weights.add("B_SF_fast", weight = B_SF_fast)
 
-        #Calculate SB weights
         SB_Stop0l = events["SB_Stop0l"]
-        SB_SF = np.ones(nevents)
-        for i, element in enumerate(events["SB_SF"]):
-            for j, weight in enumerate(element):
-                if SB_Stop0l[i][j]:
-                    SB_SF[i] = SB_SF[i] * weight
-
-        SB_fastSF = np.ones(nevents)
-        for i, element in enumerate(events["SB_fastSF"]):
-            for j, weight in enumerate(element):
-                if SB_Stop0l[i][j]:
-                    SB_fastSF[i] = SB_fastSF[i] * weight
+        SB_SF = ak.prod(ak.where(SB_Stop0l, events["SB_SF"], 1.0), axis=1)
+        SB_fastSF = ak.prod(ak.where(SB_Stop0l, events["SB_fastSF"], 1.0), axis=1)
         weights.add("SB_Stop0l", weight = SB_SF)
         weights.add("SB_fastSF", weight = SB_fastSF)
-        print(weights.weightStatistics)
         
         #Baseline selection Criteria
         selection = PackedSelection()
@@ -140,37 +101,45 @@ class CutflowProcessor(processor.ProcessorABC):
         selection.add("nTop=0, nW=0, and nresTop=0", (events["Stop0l_nTop"]==0) & (events["Stop0l_nW"] == 0) & (events["Stop0l_nResolved"]==0))
         selection.add("Mtb < 175", events["Stop0l_Mtb"] < 175)
         selection.add("Pass_dPhiMETLowDM", events["Pass_dPhiMETLowDM"])
-
-        #ISR check
-        SAT_Pass_ISR = (np.zeros(nevents)==1)
-        FatJets_pts = events["FatJet_pt"]
-        FatJets_eta = events["FatJet_eta"]
-        FatJets_phi = events["FatJet_phi"]
-        FatJets_btag = events["FatJet_btagDeepB"]
-        FatJets_subJetIdx1 = events["FatJet_subJetIdx1"]
-        FatJets_subJetIdx2 = events["FatJet_subJetIdx2"]
-        SubJets_btag = events["SubJet_btagDeepB"]
-        MET_phi = events["MET_phi"]
-        working_point = 0.2217 #2016 taken from SUSYANATools constants
-        for i, pts in enumerate(FatJets_pts):
-            if len(pts) == 0:
-                continue
-            if (np.float32(pts[0]) < 200.0): #Only use leading fatjet
-                continue
-            if (np.abs(FatJets_eta[i][0]) > 2.4):
-                continue
-            if (FatJets_btag[i][0] > working_point):
-                continue
-            nSubJets = len(SubJets_btag[i])
-            if (FatJets_subJetIdx1[i][0] >= 0 and FatJets_subJetIdx1[i][0] < nSubJets and SubJets_btag[i][FatJets_subJetIdx1[i][0]] > working_point):
-                continue
-            if (FatJets_subJetIdx2[i][0] >= 0 and FatJets_subJetIdx2[i][0] < nSubJets and SubJets_btag[i][FatJets_subJetIdx2[i][0]] > working_point):
-                continue
-            dphi = np.abs(Phi_mpi_pi(FatJets_phi[i][0] - MET_phi[i]))
-            if dphi >= 2.0:
-                SAT_Pass_ISR[i] = True
-        selection.add("SAT_Pass_ISR", SAT_Pass_ISR)
         selection.add("Smet >= 10", (events["MET_pt"]/np.sqrt(events["Stop0l_HT"]))>=10.0)
+
+        ##ISR check
+        FatJets_pts = ak.firsts(events["FatJet_pt"], axis=1)
+        FatJets_eta = ak.firsts(events["FatJet_eta"], axis=1)
+        FatJets_phi = ak.firsts(events["FatJet_phi"], axis=1)
+        FatJets_btag = ak.firsts(events["FatJet_btagDeepB"], axis=1)
+        Subjets_btag = events["SubJet_btagDeepB"]
+        nbjets = ak.num(Subjets_btag, axis=1)
+
+        #Subjet identification and tagging
+        FatJets_subJetIdx1 = ak.firsts(events["FatJet_subJetIdx1"], axis=1)
+        FatJets_subJetIdx1 = ak.mask(FatJets_subJetIdx1, FatJets_subJetIdx1 >= 0)
+        FatJets_subJetIdx2 = ak.firsts(events["FatJet_subJetIdx2"], axis=1)
+        FatJets_subJetIdx2 = ak.mask(FatJets_subJetIdx2, FatJets_subJetIdx2 >= 0)
+        Subjet1_btag = ak.firsts(Subjets_btag[ak.singletons(FatJets_subJetIdx1)])
+        Subjet2_btag = ak.firsts(Subjets_btag[ak.singletons(FatJets_subJetIdx2)])
+        #For events with no subjets, say there is a proxy subjet that isn't btagged
+        FatJets_subJetIdx1 = ak.fill_none(FatJets_subJetIdx1, 0)
+        FatJets_subJetIdx2 = ak.fill_none(FatJets_subJetIdx2, 0)
+        Subjet1_btag = ak.fill_none(Subjet1_btag, 0)
+        Subjet2_btag = ak.fill_none(Subjet2_btag, 0)
+        MET_phi = events["MET_phi"]
+        working_point = 0.2217
+        SAT_Pass_ISR = (
+            (FatJets_pts >= 200.)
+            & (abs(FatJets_eta) < 2.4)
+            & (FatJets_btag < working_point)
+            #subJet1
+            & (~((FatJets_subJetIdx1 >= 0) & (FatJets_subJetIdx1 < nbjets) & (Subjet1_btag > working_point)))
+            #subJet2
+            & (~((FatJets_subJetIdx2 >= 0) & (FatJets_subJetIdx2 < nbjets) & (Subjet2_btag > working_point)))
+            & (abs(delta_phi(FatJets_phi, MET_phi)) >= 2.0)
+        )
+        #Correct for events with no fatjets
+        SAT_Pass_ISR = ak.fill_none(SAT_Pass_ISR, False)
+        selection.add("SAT_Pass_ISR", SAT_Pass_ISR)
+
+        
         ###Create histogram
         cutflow = hist.Hist.new.Reg(20, -0.5, 19.5, name=filename).Double()
 
