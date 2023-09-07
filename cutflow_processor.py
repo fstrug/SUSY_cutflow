@@ -9,15 +9,8 @@ from coffea.analysis_tools import Weights, PackedSelection
 import hist
 import matplotlib.pyplot as plt
 
+#Redefine to match ROOT definition
 np.pi = 3.14159265358979323846
-def Phi_mpi_pi(x):
-    if x == np.isnan(x):
-        return(x)
-    while (x >= np.pi):
-        x -= 2*np.pi
-    while (x < -np.pi):
-        x += 2*np.pi
-    return(x)
 
 def delta_phi(a, b):
     return (a - b + np.pi) % np.pi - np.pi
@@ -31,7 +24,6 @@ class CutflowProcessor(processor.ProcessorABC):
         nevents = len(events)
         weights = Weights(nevents)
         ##add weight scale factors
-        #calculate sign
         sign = np.sign(events['Stop0l_evtWeight'])
         weights.add("sign", weight = sign)
         weights.add("puWeight", weight = events["puWeight"])
@@ -72,12 +64,14 @@ class CutflowProcessor(processor.ProcessorABC):
         weights.add("B_SF", weight = B_SF)
         weights.add("B_SF_fast", weight = B_SF_fast)
 
+        #Calculate SB_SF
         SB_Stop0l = events["SB_Stop0l"]
         SB_SF = ak.prod(ak.where(SB_Stop0l, events["SB_SF"], 1.0), axis=1)
         SB_fastSF = ak.prod(ak.where(SB_Stop0l, events["SB_fastSF"], 1.0), axis=1)
         weights.add("SB_Stop0l", weight = SB_SF)
         weights.add("SB_fastSF", weight = SB_fastSF)
-        
+
+        ##Selection Criteria
         #Baseline selection Criteria
         selection = PackedSelection()
         selection.add("Pass_EventFilter", events["Pass_EventFilter"])
@@ -103,7 +97,7 @@ class CutflowProcessor(processor.ProcessorABC):
         selection.add("Pass_dPhiMETLowDM", events["Pass_dPhiMETLowDM"])
         selection.add("Smet >= 10", (events["MET_pt"]/np.sqrt(events["Stop0l_HT"]))>=10.0)
 
-        ##ISR check
+        #ISR check
         FatJets_pts = ak.firsts(events["FatJet_pt"], axis=1)
         FatJets_eta = ak.firsts(events["FatJet_eta"], axis=1)
         FatJets_phi = ak.firsts(events["FatJet_phi"], axis=1)
@@ -140,7 +134,7 @@ class CutflowProcessor(processor.ProcessorABC):
         selection.add("SAT_Pass_ISR", SAT_Pass_ISR)
 
         
-        ###Create histogram
+        ##Create histogram
         cutflow = hist.Hist.new.Reg(20, -0.5, 19.5, name=filename).Double()
 
         baseline_cuts = ["Pass_EventFilter", "Pass_JetID", "Pass_CaloMETRatio", "Pass_MET", "Pass_Njets30", "Pass_LeptonVeto", "Pass_TauVeto", "Pass_IsoTrkVeto"]
@@ -168,7 +162,9 @@ class CutflowProcessor(processor.ProcessorABC):
             good_event = selection.all(*baseline_cuts) & selection.all(*Lowdm_cuts[:i+1])
             bin_n = i + len(baseline_cuts) + len(Highdm_cuts) + len(Highdm_final_cut)
             cutflow.fill(bin_n*np.ones(len(events[good_event])), weight = weights.weight()[good_event])
-        return({"data": {"cutflow": cutflow, "nevents": nevents}})
+        
+        #Return cutflow with syntax for accumulator
+        return({"data": {"cutflow": cutflow}})
     
     def postprocess(self, accumulator):
         pass
